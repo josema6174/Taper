@@ -10,9 +10,22 @@
 		228E89B73039124200DA7D20 /* Taper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Taper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		228E89CB3039138F00DA7D20 /* Exceptions for "Taper" folder in "Taper" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 228E89B63039124200DA7D20 /* Taper */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		228E89B93039124200DA7D20 /* Taper */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				228E89CB3039138F00DA7D20 /* Exceptions for "Taper" folder in "Taper" target */,
+			);
 			path = Taper;
 			sourceTree = "<group>";
 		};
@@ -256,6 +269,8 @@
 				DEVELOPMENT_TEAM = V6SQ334FU9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Taper/Info.plist;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TAPER necesita acceso al micrófono para grabar las pistas de audio";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -288,6 +303,8 @@
 				DEVELOPMENT_TEAM = V6SQ334FU9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Taper/Info.plist;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TAPER necesita acceso al micrófono para grabar las pistas de audio";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
