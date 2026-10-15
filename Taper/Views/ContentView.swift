@@ -14,11 +14,23 @@ struct ContentView: View {
     /// Fuente de verdad del motor de audio, inyectada como StateObject.
     @StateObject private var audioManager = AudioManager()
     
+    /// Controla la visibilidad del sheet de la biblioteca de tapes.
+    @State private var showLibrary: Bool = false
+    
+    /// URL del archivo .m4a exportado listo para compartir vía UIActivityViewController.
+    @State private var mixdownURL: URL?
+    
+    /// Controla la visibilidad del alert para renombrar el tape activo.
+    @State private var showRenameTapeAlert: Bool = false
+    
+    /// Texto para editar el nombre del tape activo.
+    @State private var renameTapeText: String = ""
+    
     var body: some View {
         VStack(spacing: 0) {
             
-            // ── Engine Control Section (Top) ──────────────────────
-            engineControlSection
+            // ── Tape Header (Project Name + Toolbar Actions) ──────
+            tapeHeaderSection
             
             Divider()
                 .background(Color.white.opacity(0.08))
@@ -39,97 +51,190 @@ struct ContentView: View {
         } message: {
             Text("Input monitoring is disabled while using speakers to prevent severe acoustic feedback. Please connect headphones to monitor your microphone.")
         }
+        .sheet(isPresented: $showLibrary) {
+            TapesLibraryView(audioManager: audioManager)
+        }
+        .sheet(item: $mixdownURL) { url in
+            ActivityViewController(activityItems: [url])
+        }
+        .alert("Rename Tape", isPresented: $showRenameTapeAlert) {
+            TextField("Tape name", text: $renameTapeText)
+            Button("Save") {
+                let name = renameTapeText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                audioManager.renameCurrentTape(newName: name)
+                renameTapeText = ""
+            }
+            Button("Cancel", role: .cancel) {
+                renameTapeText = ""
+            }
+        } message: {
+            Text("Enter a new name for your tape.")
+        }
     }
 }
 
-// MARK: - Engine Control Section
+// MARK: - Tape Header Section
 
 private extension ContentView {
     
-    /// Sección superior: indicador de estado, botón de Input Monitoring + botón Start/Stop del engine.
-    var engineControlSection: some View {
-        VStack(spacing: 16) {
-            
-            HStack {
-                // Indicador de estado del engine
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(audioManager.isRunning ? Color.green : Color.gray.opacity(0.4))
-                        .frame(width: 10, height: 10)
-                    
-                    Text(audioManager.isRunning ? "ENGINE RUNNING" : "ENGINE STOPPED")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .tracking(1.5)
-                        .foregroundColor(audioManager.isRunning ? .white : .gray)
-                }
-                
-                Spacer()
-                
-                // Botón de Input Monitoring (requiere auriculares)
-                Button {
-                    audioManager.toggleMonitoring()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "headphones")
-                            .font(.system(size: 12, weight: .bold))
-                        
-                        Text(audioManager.isMonitoringEnabled ? "MONITOR ON" : "MONITOR")
-                            .font(.system(size: 10, weight: .heavy, design: .monospaced))
-                            .tracking(1)
-                    }
-                    .foregroundColor(
-                        audioManager.isMonitoringEnabled
-                            ? Color(red: 0.3, green: 0.85, blue: 0.45)
-                            : Color.gray.opacity(0.7)
-                    )
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(
-                                audioManager.isMonitoringEnabled
-                                    ? Color(red: 0.3, green: 0.85, blue: 0.45).opacity(0.12)
-                                    : Color.white.opacity(0.04)
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(
-                                audioManager.isMonitoringEnabled
-                                    ? Color(red: 0.3, green: 0.85, blue: 0.45).opacity(0.8)
-                                    : Color.white.opacity(0.1),
-                                lineWidth: 1
-                            )
-                    )
-                }
-            }
-            .padding(.horizontal, 24)
-            
+    /// Barra superior que muestra el nombre del tape activo, botón de exportar mezcla y botón para abrir la biblioteca.
+    var tapeHeaderSection: some View {
+        HStack {
+            // Nombre del tape activo (tappable para renombrar manualmente)
             Button {
-                audioManager.toggleEngine()
+                renameTapeText = audioManager.currentTape?.name ?? ""
+                showRenameTapeAlert = true
             } label: {
-                Text(audioManager.isRunning ? "STOP" : "START")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .tracking(2)
-                    .foregroundColor(audioManager.isRunning ? .white : .black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(audioManager.isRunning
-                                  ? Color.white.opacity(0.08)
-                                  : Color.white)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text("CURRENT TAPE")
+                            .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundColor(.gray.opacity(0.5))
+                        
+                        Image(systemName: "pencil")
+                            .font(.system(size: 8))
+                            .foregroundColor(.gray.opacity(0.4))
+                    }
+                    
+                    Text(audioManager.currentTape?.name ?? "No Tape")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                }
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 24)
+            .buttonStyle(.plain)
+            
+            Spacer()
+            
+            HStack(spacing: 8) {
+                // ── Componente DAW (Monitoreo en vivo) ────────────
+                inputMonitoringButton
+                
+                // ── Divisor sutil y suave (DAW vs. Gestión de App) ──
+                RoundedRectangle(cornerRadius: 0.5)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.0),
+                                Color.white.opacity(0.18),
+                                Color.white.opacity(0.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 1, height: 22)
+                    .padding(.horizontal, 2)
+                
+                // ── Componentes de App/Proyecto (Exportar y Biblioteca) ──
+                HStack(spacing: 8) {
+                    shareMixButton
+                    tapesLibraryButton
+                }
+            }
         }
-        .padding(.vertical, 20)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(Color.white.opacity(0.02))
+    }
+    
+    /// Botón para renderizar y compartir la mezcla de las pistas grabadas (solo icono).
+    /// Muestra un ProgressView mientras `audioManager.isExporting` esté activo.
+    var shareMixButton: some View {
+        let hasAudio = audioManager.tracks.contains(where: { $0.hasAudio })
+        
+        return Button {
+            audioManager.exportMixdown { url in
+                self.mixdownURL = url
+            }
+        } label: {
+            Group {
+                if audioManager.isExporting {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color(red: 1.0, green: 0.75, blue: 0.2)))
+                        .scaleEffect(0.75)
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+            .foregroundColor(
+                audioManager.isExporting
+                    ? Color(red: 1.0, green: 0.75, blue: 0.2)
+                    : (hasAudio ? .white.opacity(0.85) : .white.opacity(0.3))
+            )
+            .frame(width: 36, height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(
+                        audioManager.isExporting
+                            ? Color(red: 1.0, green: 0.75, blue: 0.2).opacity(0.4)
+                            : Color.white.opacity(0.1),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .disabled(!hasAudio || audioManager.isExporting)
+    }
+    
+    /// Botón compacto de Input Monitoring en la barra superior (solo icono, requiere auriculares).
+    var inputMonitoringButton: some View {
+        Button {
+            audioManager.toggleMonitoring()
+        } label: {
+            Image(systemName: "headphones")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(
+                    audioManager.isMonitoringEnabled
+                        ? Color(red: 0.3, green: 0.85, blue: 0.45)
+                        : Color.white.opacity(0.7)
+                )
+                .frame(width: 36, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(
+                            audioManager.isMonitoringEnabled
+                                ? Color(red: 0.3, green: 0.85, blue: 0.45).opacity(0.12)
+                                : Color.white.opacity(0.06)
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(
+                            audioManager.isMonitoringEnabled
+                                ? Color(red: 0.3, green: 0.85, blue: 0.45).opacity(0.8)
+                                : Color.white.opacity(0.1),
+                            lineWidth: 1
+                        )
+                )
+        }
+    }
+    
+    /// Botón de biblioteca de tapes (solo icono) en la barra superior.
+    var tapesLibraryButton: some View {
+        Button {
+            showLibrary = true
+        } label: {
+            Image(systemName: "tray.full.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 36, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        }
     }
 }
 
@@ -144,7 +249,6 @@ private extension ContentView {
                 ChannelStrip(
                     track: track,
                     trackIndex: index,
-                    isEngineRunning: audioManager.isRunning,
                     audioManager: audioManager
                 )
                 
@@ -175,7 +279,7 @@ private extension ContentView {
                 label: "▶  PLAY",
                 isActive: audioManager.isMasterPlaying,
                 activeColor: Color(red: 0.3, green: 0.85, blue: 0.45),
-                isEnabled: audioManager.isRunning && !audioManager.isMasterRecording
+                isEnabled: !audioManager.isMasterRecording
             ) {
                 audioManager.startMasterPlay()
             }
@@ -189,7 +293,7 @@ private extension ContentView {
                 label: "●  REC",
                 isActive: audioManager.isMasterRecording,
                 activeColor: Color(red: 1.0, green: 0.18, blue: 0.18),
-                isEnabled: audioManager.isRunning && anyArmed
+                isEnabled: anyArmed
             ) {
                 audioManager.startMasterRecord()
             }
@@ -203,7 +307,7 @@ private extension ContentView {
                 label: "■  STOP",
                 isActive: false,
                 activeColor: .white,
-                isEnabled: audioManager.isRunning && (audioManager.isMasterPlaying || audioManager.isMasterRecording)
+                isEnabled: audioManager.isMasterPlaying || audioManager.isMasterRecording
             ) {
                 audioManager.stopMasterTransport()
             }
@@ -260,7 +364,6 @@ struct ChannelStrip: View {
     
     let track: Track
     let trackIndex: Int
-    let isEngineRunning: Bool
     
     @ObservedObject var audioManager: AudioManager
     
@@ -572,6 +675,31 @@ private extension ChannelStrip {
         }
         .frame(width: 8, height: 60)
     }
+}
+
+// MARK: - ActivityViewController (Share Sheet)
+
+/// Wrapper de UIViewControllerRepresentable para presentar el UIActivityViewController nativo de iOS.
+struct ActivityViewController: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - URL + Identifiable
+
+/// Conformidad retroactiva de URL a Identifiable para uso con `.sheet(item: $mixdownURL)`.
+extension URL: @retroactive Identifiable {
+    public var id: String { absoluteString }
 }
 
 // MARK: - Preview

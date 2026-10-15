@@ -9,11 +9,24 @@ import Foundation
 
 /// Modelo de datos para una pista individual del grabador de 4 pistas.
 ///
-/// Es un value type (struct) e Identifiable para poder usarse en `ForEach`.
-/// El AudioManager posee un array `[Track]` publicado vía `@Published`,
-/// y muta las propiedades de cada track según las acciones del usuario
-/// o del Master Transport.
-struct Track: Identifiable {
+/// Es un value type (struct), Identifiable para `ForEach`, y Codable para
+/// persistencia en disco. Los estados efímeros de UI/DSP (isRecording, isPlaying,
+/// isArmed, meterLevel) se excluyen de la codificación y se restauran a sus
+/// valores por defecto al decodificar.
+struct Track: Identifiable, Codable {
+    
+    // MARK: - CodingKeys
+    
+    /// Solo se persisten las propiedades relevantes al proyecto:
+    /// identificación, archivo de audio, volumen y mute.
+    /// Los estados de transporte y metering son efímeros y no se guardan.
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case fileURL
+        case volume
+        case isMuted
+    }
     
     // MARK: - Identificación
     
@@ -23,7 +36,7 @@ struct Track: Identifiable {
     /// Nombre corto para mostrar en la UI (e.g. "T1", "T2").
     let name: String
     
-    // MARK: - Estado de Transporte
+    // MARK: - Estado de Transporte (efímero — no se persiste)
     
     /// `true` mientras esta pista está capturando audio del micrófono.
     /// Solo una pista puede estar grabando a la vez (limitación de `installTap`).
@@ -58,7 +71,7 @@ struct Track: Identifiable {
     /// el valor de `volume` se conserva para restaurarlo al desmutear.
     var isMuted: Bool = false
     
-    // MARK: - Metering
+    // MARK: - Metering (efímero — no se persiste)
     
     /// Nivel de señal normalizado para el VU meter de la UI (0.0 – 1.0).
     /// Se calcula vía RMS → dB en el AudioManager y siempre se actualiza
