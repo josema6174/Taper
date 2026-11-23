@@ -26,6 +26,9 @@ struct ContentView: View {
     /// Texto para editar el nombre del tape activo.
     @State private var renameTapeText: String = ""
     
+    /// Índice de la pista cuyo cajón de EQ está abierto (`nil` = cerrado).
+    @State private var eqOpenTrack: Int? = nil
+    
     var body: some View {
         VStack(spacing: 0) {
             
@@ -45,6 +48,16 @@ struct ContentView: View {
             masterTransportBar
         }
         .background(Color.black)
+        .fullScreenCover(isPresented: Binding(
+            get: { eqOpenTrack != nil },
+            set: { if !$0 { eqOpenTrack = nil } }
+        )) {
+            if let idx = eqOpenTrack, audioManager.tracks.indices.contains(idx) {
+                TrackFXView(trackIndex: idx, audioManager: audioManager) {
+                    eqOpenTrack = nil
+                }
+            }
+        }
         .preferredColorScheme(.dark)
         .alert("Headphones Required", isPresented: $audioManager.showMonitoringWarning) {
             Button("OK", role: .cancel) { }
@@ -249,7 +262,8 @@ private extension ContentView {
                 ChannelStrip(
                     track: track,
                     trackIndex: index,
-                    audioManager: audioManager
+                    audioManager: audioManager,
+                    onOpenFX: { eqOpenTrack = index }
                 )
                 
                 if index < audioManager.tracks.count - 1 {
@@ -307,7 +321,7 @@ private extension ContentView {
                 label: "■  STOP",
                 isActive: false,
                 activeColor: .white,
-                isEnabled: audioManager.isMasterPlaying || audioManager.isMasterRecording
+                isEnabled: audioManager.isMasterPlaying || audioManager.isMasterRecording || audioManager.tracks.contains(where: { $0.isPlaying })
             ) {
                 audioManager.stopMasterTransport()
             }
@@ -367,8 +381,8 @@ struct ChannelStrip: View {
     
     @ObservedObject var audioManager: AudioManager
     
-    /// Estado local del botón Solo (no conectado al AudioManager todavía).
-    @State private var isSoloed: Bool = false
+    /// Acción al hacer doble tap sobre el strip: abre la ventana de efectos (FX) de la pista.
+    var onOpenFX: () -> Void = {}
     
     // Accent colors
     private let accentRed    = Color(red: 0.85, green: 0.25, blue: 0.25)
@@ -381,14 +395,15 @@ struct ChannelStrip: View {
     var body: some View {
         VStack(spacing: 10) {
             
-            // ── Audio Badge + Channel Label ───────────────────────
-            channelHeader
-            
-            // ── VU Meter (vertical) ───────────────────────────────
-            vuMeter
-            
-            // ── Volume Readout ────────────────────────────────────
-            volumeReadout
+            // ── Header + VU + Readout (doble tap → ventana FX) ────
+            VStack(spacing: 10) {
+                channelHeader
+                vuMeter
+                volumeReadout
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: onOpenFX)
             
             // ── Volume Fader (vertical, custom) ───────────────────
             verticalFader
@@ -441,6 +456,15 @@ private extension ChannelStrip {
                     track.isArmed     ? accentOrange :
                     .white
                 )
+            
+            // Indicador de FX activo (EQ o reverb ≠ 0)
+            Text("FX")
+                .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                .foregroundColor(.black)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(RoundedRectangle(cornerRadius: 2).fill(Color.white))
+                .opacity(track.isFXActive ? 1 : 0)
         }
     }
     
@@ -541,20 +565,20 @@ private extension ChannelStrip {
     
     var soloButton: some View {
         Button {
-            isSoloed.toggle()
+            audioManager.toggleSolo(for: trackIndex)
         } label: {
             Text("S")
                 .font(.system(size: 10, weight: .heavy, design: .monospaced))
-                .foregroundColor(isSoloed ? .black : .gray)
+                .foregroundColor(track.isSoloed ? .black : .gray)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 5)
                 .background(
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(isSoloed ? accentYellow : Color.white.opacity(0.06))
+                        .fill(track.isSoloed ? accentYellow : Color.white.opacity(0.06))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 3)
-                        .stroke(isSoloed ? accentYellow : Color.gray.opacity(0.2), lineWidth: 1)
+                        .stroke(track.isSoloed ? accentYellow : Color.gray.opacity(0.2), lineWidth: 1)
                 )
         }
     }
@@ -674,6 +698,213 @@ private extension ChannelStrip {
             }
         }
         .frame(width: 8, height: 60)
+    }
+}
+
+// MARK: - TrackFXView
+
+/// Ventana a pantalla completa de efectos de una pista.
+/// Hoy contiene el EQ de 3 bandas; pensada para alojar más efectos a futuro.
+struct TrackFXView: View {
+    let trackIndex: Int
+    @ObservedObject var audioManager: AudioManager
+    let onClose: () -> Void
+    
+    private var track: Track { audioManager.tracks[trackIndex] }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // ── Header ────────────────────────────────────────────
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("TRACK FX")
+                        .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                        .tracking(1.5)
+                        .foregroundColor(.gray.opacity(0.5))
+                    Text(track.name)
+                        .font(.system(size: 22, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 40, height: 40)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            
+            Divider().background(Color.white.opacity(0.08))
+            
+            // ── EQ Section ────────────────────────────────────────
+            ScrollView {
+                VStack(spacing: 24) {
+                    HStack {
+                        Text("EQUALIZER + REVERB")
+                            .font(.system(size: 11, weight: .heavy, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Button {
+                            audioManager.resetFX(for: trackIndex)
+                        } label: {
+                            Text("RESET")
+                                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                                .tracking(1)
+                                .foregroundColor(track.isFXActive ? .white : .gray.opacity(0.5))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .stroke(Color.gray.opacity(track.isFXActive ? 0.6 : 0.2), lineWidth: 1)
+                                )
+                        }
+                        .disabled(!track.isFXActive)
+                    }
+                    
+                    bandRow("LOW",  hint: "100 Hz", value: track.eqLow)  { audioManager.setEQ(for: trackIndex, low: $0) }
+                    bandRow("MID",  hint: "1 kHz",  value: track.eqMid)  { audioManager.setEQ(for: trackIndex, mid: $0) }
+                    bandRow("HIGH", hint: "8 kHz",  value: track.eqHigh) { audioManager.setEQ(for: trackIndex, high: $0) }
+                    
+                    reverbRow
+
+                }
+                .padding(24)
+            }
+            
+            Spacer(minLength: 0)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+    }
+    
+    private var reverbRow: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("REV")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(track.reverbMix > 0 ? .white : .gray)
+                Text("room")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.5))
+                Spacer()
+            }
+            
+            KnobView(
+                value: Binding(
+                    get: { Double(track.reverbMix) },
+                    set: { audioManager.setReverb(for: trackIndex, mix: Float($0)) }
+                ),
+                range: 0...100
+            )
+            .frame(width: 110, height: 110)
+            
+            Text("\(Int(track.reverbMix.rounded()))%")
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+    }
+    
+    private func bandRow(_ label: String, hint: String, value: Float, onChange: @escaping (Float) -> Void) -> some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(value != 0 ? .white : .gray)
+                Text(hint)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.5))
+                Spacer()
+                Text(String(format: "%+d dB", Int(value.rounded())))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(.gray)
+            }
+            Slider(
+                value: Binding(get: { Double(value) }, set: { onChange(Float($0)) }),
+                in: -12...12,
+                step: 0.5
+            )
+            .tint(.white)
+        }
+    }
+}
+
+// MARK: - KnobView
+
+/// Potenciómetro circular minimalista (arco de 270°). Se ajusta arrastrando
+/// verticalmente (arriba = más) o rotando el dedo alrededor; doble tap = reset a mínimo.
+struct KnobView: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    
+    @State private var dragStartValue: Double? = nil
+    
+    private let startAngle: Double = 135   // grados, 0° = derecha, sentido horario
+    private let sweep: Double = 270
+    
+    private var normalized: Double {
+        (value - range.lowerBound) / (range.upperBound - range.lowerBound)
+    }
+    
+    var body: some View {
+        GeometryReader { geo in
+            let size = min(geo.size.width, geo.size.height)
+            let lineWidth: CGFloat = 4
+            
+            ZStack {
+                // Riel
+                Circle()
+                    .trim(from: 0, to: sweep / 360)
+                    .stroke(Color.white.opacity(0.12), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(startAngle))
+                    .padding(lineWidth)
+                
+                // Arco activo
+                Circle()
+                    .trim(from: 0, to: max(0.0001, sweep / 360 * normalized))
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(startAngle))
+                    .padding(lineWidth)
+                
+                // Cuerpo del knob
+                Circle()
+                    .fill(Color.white.opacity(0.05))
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                    .padding(lineWidth + 10)
+                
+                // Indicador
+                Capsule()
+                    .fill(Color.white)
+                    .frame(width: 3, height: size * 0.16)
+                    .offset(y: -(size / 2 - lineWidth - 10 - size * 0.08 - 4))
+                    .rotationEffect(.degrees(-135 + sweep * normalized))
+            }
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        if dragStartValue == nil { dragStartValue = value }
+                        // 150 pt de arrastre vertical = recorrido completo
+                        let delta = -Double(drag.translation.height) / 150.0
+                        let span = range.upperBound - range.lowerBound
+                        let newValue = (dragStartValue ?? value) + delta * span
+                        value = min(max(newValue, range.lowerBound), range.upperBound)
+                    }
+                    .onEnded { _ in dragStartValue = nil }
+            )
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded { value = range.lowerBound }
+            )
+        }
     }
 }
 

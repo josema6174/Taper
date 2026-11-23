@@ -27,6 +27,36 @@ class AudioManager: ObservableObject {
     /// Nodo mixer dedicado para monitorear en tiempo real la señal del micrófono hacia los auriculares.
     let monitorMixerNode = AVAudioMixerNode()
     
+    /// Un EQ de 3 bandas por pista: Player -> EQ -> MainMixer.
+    let eqNodes: [AVAudioUnitEQ] = (0..<trackCount).map { _ in
+        let eq = AVAudioUnitEQ(numberOfBands: 3)
+        let low = eq.bands[0]
+        low.filterType = .lowShelf
+        low.frequency = 100.0
+        low.gain = 0.0
+        low.bypass = false
+        let mid = eq.bands[1]
+        mid.filterType = .parametric
+        mid.frequency = 1000.0
+        mid.bandwidth = 1.0
+        mid.gain = 0.0
+        mid.bypass = false
+        let high = eq.bands[2]
+        high.filterType = .highShelf
+        high.frequency = 8000.0
+        high.gain = 0.0
+        high.bypass = false
+        return eq
+    }
+    
+    /// Un reverb por pista: Player -> EQ -> Reverb -> MainMixer.
+    let reverbNodes: [AVAudioUnitReverb] = (0..<trackCount).map { _ in
+        let reverb = AVAudioUnitReverb()
+        reverb.loadFactoryPreset(.mediumRoom)
+        reverb.wetDryMix = 0.0
+        return reverb
+    }
+    
     // MARK: - Published State
     
     /// Array de 4 Tracks con su estado individual.
@@ -142,17 +172,97 @@ class AudioManager: ObservableObject {
         monitorMixerNode.outputVolume = isMonitoringEnabled ? 1.0 : 0.0
         print("Nodo monitorMixerNode adjuntado y conectado al mainMixerNode (volumen: \(monitorMixerNode.outputVolume)).")
         
-        // 2. Adjuntar y conectar los 4 playerNodes al mainMixerNode
+        // 2. Adjuntar EQs y reverb
+        for eq in eqNodes where eq.engine == nil {
+            engine.attach(eq)
+        }
+        for reverb in reverbNodes where reverb.engine == nil {
+            engine.attach(reverb)
+        }
+        
+        // 3. Player -> EQ -> MainMixer (por pista)
         for (index, player) in playerNodes.enumerated() {
             if player.engine == nil {
                 engine.attach(player)
             }
-            engine.connect(player, to: engine.mainMixerNode, format: inputFormat)
-            player.volume = tracks[index].isMuted ? 0.0 : tracks[index].volume
+            engine.connect(player, to: eqNodes[index], format: inputFormat)
+            engine.connect(eqNodes[index], to: reverbNodes[index], format: inputFormat)
+            engine.connect(reverbNodes[index], to: engine.mainMixerNode, format: inputFormat)
+            player.volume = effectiveVolume(index)
             print("PlayerNode[\(index)] adjuntado y conectado al mixer.")
         }
         
-        print("Grafo configurado: \(trackCount) pistas + monitorMixer conectados al mixer.")
+        // 4. Bus master: MainMixer -> Output (formato del hardware de salida)
+        var hwFormat = engine.outputNode.outputFormat(forBus: 0)
+        if hwFormat.sampleRate == 0 || hwFormat.channelCount == 0 {
+            hwFormat = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        }
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: hwFormat)
+        
+        applyMixState()
+        
+        print("Grafo configurado: \(trackCount) pistas (Player->EQ->Reverb->Mixer) + monitorMixer -> Output.")
+    }
+    
+    // MARK: - EQ & Reverb Control
+    
+    /// Rango válido del EQ en dB.
+    private let eqRange: ClosedRange<Float> = -12.0...12.0
+    
+    /// Aplica a los nodos DSP los valores de EQ y reverb del estado actual.
+    private func applyMixState() {
+        for i in 0..<min(trackCount, tracks.count) {
+            eqNodes[i].bands[0].gain = tracks[i].eqLow
+            eqNodes[i].bands[1].gain = tracks[i].eqMid
+            eqNodes[i].bands[2].gain = tracks[i].eqHigh
+            reverbNodes[i].wetDryMix = tracks[i].reverbMix
+        }
+    }
+    
+    /// Actualiza una o más bandas del EQ de una pista, y guarda el proyecto.
+    func setEQ(for trackIndex: Int, low: Float? = nil, mid: Float? = nil, high: Float? = nil) {
+        guard (0..<trackCount).contains(trackIndex) else { return }
+        if let low = low {
+            let v = min(max(low, eqRange.lowerBound), eqRange.upperBound)
+            tracks[trackIndex].eqLow = v
+            eqNodes[trackIndex].bands[0].gain = v
+        }
+        if let mid = mid {
+            let v = min(max(mid, eqRange.lowerBound), eqRange.upperBound)
+            tracks[trackIndex].eqMid = v
+            eqNodes[trackIndex].bands[1].gain = v
+        }
+        if let high = high {
+            let v = min(max(high, eqRange.lowerBound), eqRange.upperBound)
+            tracks[trackIndex].eqHigh = v
+            eqNodes[trackIndex].bands[2].gain = v
+        }
+        saveCurrentTape()
+    }
+    
+    /// Resetea las 3 bandas del EQ de una pista a 0 dB.
+    func resetEQ(for trackIndex: Int) {
+        setEQ(for: trackIndex, low: 0.0, mid: 0.0, high: 0.0)
+    }
+    
+    /// Ajusta el reverb individual de una pista (0 – 100) y guarda el proyecto.
+    func setReverb(for trackIndex: Int, mix: Float) {
+        guard (0..<trackCount).contains(trackIndex) else { return }
+        let v = min(max(mix, 0.0), 100.0)
+        tracks[trackIndex].reverbMix = v
+        reverbNodes[trackIndex].wetDryMix = v
+        saveCurrentTape()
+    }
+    
+    /// Resetea EQ (3 bandas) y reverb de una pista a 0.0, en modelo y nodos, y guarda.
+    func resetFX(for trackIndex: Int) {
+        guard (0..<trackCount).contains(trackIndex) else { return }
+        tracks[trackIndex].eqLow = 0.0
+        tracks[trackIndex].eqMid = 0.0
+        tracks[trackIndex].eqHigh = 0.0
+        tracks[trackIndex].reverbMix = 0.0
+        applyMixState()
+        saveCurrentTape()
     }
     
     // MARK: - Engine Auto-Start & Safety Check (Lazy Start)
@@ -250,7 +360,7 @@ class AudioManager: ObservableObject {
                 installMeterTap(on: player, trackIndex: i)
                 
                 // Agendar archivo con inicio sincronizado
-                player.scheduleFile(file, at: nil) { [weak self] in
+                player.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         if self.tracks[i].isPlaying {
@@ -266,7 +376,7 @@ class AudioManager: ObservableObject {
                     }
                 }
                 
-                player.volume = tracks[i].isMuted ? 0.0 : tracks[i].volume
+                player.volume = effectiveVolume(i)
                 player.prepare(withFrameCount: 8192)
                 player.play(at: startTime)
                 tracks[i].isPlaying = true
@@ -365,7 +475,7 @@ class AudioManager: ObservableObject {
                 player.removeTap(onBus: 0)
                 installMeterTap(on: player, trackIndex: i)
                 
-                player.scheduleFile(file, at: nil) { [weak self] in
+                player.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         if self.tracks[i].isPlaying {
@@ -377,7 +487,7 @@ class AudioManager: ObservableObject {
                     }
                 }
                 
-                player.volume = tracks[i].isMuted ? 0.0 : tracks[i].volume
+                player.volume = effectiveVolume(i)
                 player.prepare(withFrameCount: 8192)
                 player.play(at: startTime)
                 tracks[i].isPlaying = true
@@ -518,7 +628,9 @@ class AudioManager: ObservableObject {
                 let maxFrameCapacity: AVAudioFrameCount = 4096
                 try self.engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: maxFrameCapacity)
                 
-                let totalFramesToRender = AVAudioFramePosition(ceil(maxDurationSeconds * renderFormat.sampleRate))
+                // Cola extra para que el reverb decaiga naturalmente al final de la mezcla
+                let reverbTailSeconds: Double = self.reverbNodes.contains(where: { $0.wetDryMix > 0 }) ? 3.0 : 0.0
+                let totalFramesToRender = AVAudioFramePosition(ceil((maxDurationSeconds + reverbTailSeconds) * renderFormat.sampleRate))
                 
                 // 4. Crear archivo de salida .m4a (AAC) en el directorio temporal
                 let rawTapeName = self.currentTape?.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -551,9 +663,12 @@ class AudioManager: ObservableObject {
                         player.removeTap(onBus: 0)
                         
                         let track = self.tracks[item.trackIndex]
-                        player.volume = track.isMuted ? 0.0 : track.volume
+                        player.volume = self.effectiveVolume(item.trackIndex)
                         player.scheduleFile(item.file, at: nil, completionHandler: nil)
                     }
+                    
+                    // Aplicar EQ y reverb (Player -> EQ -> Reverb -> MainMixer -> Output)
+                    self.applyMixState()
                     
                     // Asegurar que playerNodes sin audio estén silenciados y sin taps
                     for (index, player) in self.playerNodes.enumerated() {
@@ -664,10 +779,11 @@ class AudioManager: ObservableObject {
         
         // Resetear las pistas del AudioManager a los defaults del nuevo proyecto
         tracks = newTape.tracks
+        applyMixState()
         
         // Aplicar volúmenes a los playerNodes
         for i in 0..<trackCount {
-            playerNodes[i].volume = tracks[i].isMuted ? 0.0 : tracks[i].volume
+            playerNodes[i].volume = effectiveVolume(i)
         }
         
         // Persistir inmediatamente
@@ -709,10 +825,11 @@ class AudioManager: ObservableObject {
         }
         
         tracks = loadedTracks
+        applyMixState()
         
         // Aplicar volúmenes a los playerNodes
         for i in 0..<trackCount {
-            playerNodes[i].volume = tracks[i].isMuted ? 0.0 : tracks[i].volume
+            playerNodes[i].volume = effectiveVolume(i)
         }
         
         ensureEngineIsRunning()
@@ -829,9 +946,7 @@ class AudioManager: ObservableObject {
     func setVolume(for trackIndex: Int, volume: Float) {
         guard (0..<trackCount).contains(trackIndex) else { return }
         tracks[trackIndex].volume = volume
-        if !tracks[trackIndex].isMuted {
-            playerNodes[trackIndex].volume = volume
-        }
+        playerNodes[trackIndex].volume = effectiveVolume(trackIndex)
     }
     
     /// Alterna el estado de mute de la pista indicada.
@@ -842,7 +957,34 @@ class AudioManager: ObservableObject {
     func toggleMute(for trackIndex: Int) {
         guard (0..<trackCount).contains(trackIndex) else { return }
         tracks[trackIndex].isMuted.toggle()
-        playerNodes[trackIndex].volume = tracks[trackIndex].isMuted ? 0.0 : tracks[trackIndex].volume
+        applyTrackVolumes()
+    }
+    
+    // MARK: - Solo
+    
+    /// `true` si alguna pista está en Solo.
+    private var anySoloed: Bool { tracks.contains(where: { $0.isSoloed }) }
+    
+    /// Volumen efectivo del nodo: 0 si está muteada, o si hay solos y esta pista no es solo.
+    private func effectiveVolume(_ i: Int) -> Float {
+        let t = tracks[i]
+        if t.isMuted { return 0.0 }
+        if anySoloed && !t.isSoloed { return 0.0 }
+        return t.volume
+    }
+    
+    /// Reaplica el volumen efectivo a los 4 playerNodes.
+    private func applyTrackVolumes() {
+        for i in 0..<min(trackCount, tracks.count) {
+            playerNodes[i].volume = effectiveVolume(i)
+        }
+    }
+    
+    /// Alterna Solo en la pista indicada (múltiples solos permitidos, estilo consola).
+    func toggleSolo(for trackIndex: Int) {
+        guard (0..<trackCount).contains(trackIndex) else { return }
+        tracks[trackIndex].isSoloed.toggle()
+        applyTrackVolumes()
     }
     
     // MARK: - DSP Helpers
@@ -881,7 +1023,7 @@ class AudioManager: ObservableObject {
     ///   - player: Nodo de reproducción en el que instalar el tap.
     ///   - trackIndex: Índice de la pista para actualizar `meterLevel`.
     private func installMeterTap(on player: AVAudioPlayerNode, trackIndex: Int) {
-        let postFaderScale = tracks[trackIndex].isMuted ? Float(0.0) : tracks[trackIndex].volume
+        let postFaderScale = effectiveVolume(trackIndex)
         player.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
             guard let self = self else { return }
             let level = self.calculateNormalizedLevel(from: buffer) * postFaderScale

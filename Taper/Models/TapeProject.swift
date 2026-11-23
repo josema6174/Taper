@@ -28,6 +28,19 @@ struct TapeProject: Identifiable, Codable {
     /// se restauran a sus defaults al decodificar gracias al Codable de Track.
     var tracks: [Track]
     
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, tracks
+    }
+    
+    /// Decodificación explícita (claves desconocidas de versiones previas, e.g. `masterReverbMix`, se ignoran).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.tracks = try c.decode([Track].self, forKey: .tracks)
+    }
+    
     /// Crea un nuevo proyecto con 4 pistas vacías y valores por defecto.
     /// - Parameter name: Nombre del proyecto.
     init(name: String) {
